@@ -6,18 +6,22 @@ use starknet::{
     core::types::{BlockId, BlockTag, MaybePendingBlockWithTxHashes},
     providers::{jsonrpc::HttpTransport, JsonRpcClient, Provider},
 };
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::{
+    net::lookup_host,
+    sync::mpsc::{UnboundedReceiver, UnboundedSender},
+};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{
+    cli::UpstreamSpec,
     head::{ChainHead, ConfirmedHead, PendingHead},
     load_balancer::LoadBalancer,
     shutdown::{FinishSignal, ShutdownHandle},
 };
 
 pub struct UpstreamStore {
-    upstreams: Vec<Url>,
+    upstreams: Vec<UpstreamSpec>,
 }
 
 // TODO: support block stream subscription via WebSocket instead of polling
@@ -35,22 +39,41 @@ struct NewHeadMessage {
 
 // TODO: make this configurable for each upstream group.
 const TRACKER_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const TRACKER_POLL_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl UpstreamStore {
-    pub fn new(upstream_urls: Vec<Url>) -> Self {
+    pub fn new(upstream_specs: Vec<UpstreamSpec>) -> Self {
         Self {
-            upstreams: upstream_urls,
+            upstreams: upstream_specs,
         }
     }
 
-    pub fn start(self) -> (LoadBalancer, ShutdownHandle) {
+    pub async fn start(self) -> Result<(LoadBalancer, ShutdownHandle)> {
         let (shutdown_handle, finish_sender) = ShutdownHandle::new();
         let cancellation_token = shutdown_handle.cancellation_token();
 
         let (head_sender, head_receiver) = tokio::sync::mpsc::unbounded_channel();
 
-        let task_handles = self
-            .upstreams
+        // TODO: dynamically monitor DNS resolution instead of only checking at startup
+        let mut resolved_upstreams = vec![];
+        for spec in self.upstreams {
+            match spec {
+                UpstreamSpec::Raw(url) => resolved_upstreams.push(url),
+                UpstreamSpec::Dns(dns_spec) => {
+                    for name in lookup_host(dns_spec.host_port).await? {
+                        resolved_upstreams
+                            .push(Url::parse(&format!("http://{}{}", name, dns_spec.path))?)
+                    }
+                }
+            }
+        }
+
+        println!("{} upstreams resolved:", resolved_upstreams.len());
+        for upstream in resolved_upstreams.iter() {
+            println!("- {}", upstream);
+        }
+
+        let task_handles = resolved_upstreams
             .iter()
             .enumerate()
             .map(|(ind, upstream)| {
@@ -83,7 +106,7 @@ impl UpstreamStore {
         // TODO: implement a way to detect readiness, as currently the app starts up with no
         //       available upstreams and will fail first few requests.
         tokio::spawn(Self::run(
-            self.upstreams.len(),
+            resolved_upstreams.len(),
             head_receiver,
             available_upstreams.clone(),
             task_handles,
@@ -91,10 +114,10 @@ impl UpstreamStore {
             cancellation_token,
         ));
 
-        (
-            LoadBalancer::new(self.upstreams, available_upstreams),
+        Ok((
+            LoadBalancer::new(resolved_upstreams, available_upstreams),
             shutdown_handle,
-        )
+        ))
     }
 
     async fn run(
@@ -156,7 +179,13 @@ impl UpstreamTracker {
     fn new(index: usize, rpc_url: Url, channel: UnboundedSender<NewHeadMessage>) -> Self {
         Self {
             index,
-            client: JsonRpcClient::new(HttpTransport::new(rpc_url)),
+            client: JsonRpcClient::new(HttpTransport::new_with_client(
+                rpc_url,
+                reqwest::ClientBuilder::new()
+                    .timeout(TRACKER_POLL_TIMEOUT)
+                    .build()
+                    .unwrap(),
+            )),
             channel,
         }
     }

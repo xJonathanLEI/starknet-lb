@@ -3,7 +3,9 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Result;
 use axum::{extract::State, response::IntoResponse, routing::post, Router};
 use clap::Parser;
-use url::Url;
+
+mod cli;
+use cli::{UpstreamSpec, UpstreamSpecParser};
 
 mod head;
 
@@ -24,8 +26,8 @@ struct Cli {
     #[clap(long, default_value = "9546")]
     port: u16,
     /// Upstream JSON-RPC endpoints.
-    #[clap(long = "upstream")]
-    upstreams: Vec<Url>,
+    #[clap(long = "upstream", value_parser = UpstreamSpecParser)]
+    upstreams: Vec<UpstreamSpec>,
 }
 
 #[tokio::main]
@@ -33,7 +35,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let store = UpstreamStore::new(cli.upstreams);
-    let (load_balancer, store_shutdown) = store.start();
+    let (load_balancer, store_shutdown) = store.start().await?;
 
     let axum_app = Router::new()
         .route("/", post(proxy))

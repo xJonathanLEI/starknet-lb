@@ -10,7 +10,7 @@ axum = { version = "0.7.9", default-features = false, features = ["tokio", "http
 clap = { version = "4.5.23", default-features = false, features = ["derive", "env", "std"] }
 futures-util = { version = "0.3.31", default-features = false }
 rand = { version = "0.8.5", default-features = false }
-reqwest = { version = "0.12.9", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.11.27", default-features = false, features = ["rustls-tls"] }
 starknet = "0.12.0"
 tokio = { version = "1.42.0", default-features = false, features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util = { version = "0.7.13", default-features = false }
