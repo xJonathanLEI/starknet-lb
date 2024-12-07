@@ -1,0 +1,19 @@
+FROM messense/rust-musl-cross:aarch64-musl AS build
+
+WORKDIR /src
+COPY . /src
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --target aarch64-unknown-linux-musl
+
+RUN --mount=type=cache,target=/src/target \
+    mv ./target/aarch64-unknown-linux-musl/release/starknet-lb .
+
+FROM --platform=linux/arm64/v8 alpine:latest
+
+LABEL org.opencontainers.image.source=https://github.com/xJonathanLEI/starknet-lb
+
+COPY --from=build /src/starknet-lb /usr/bin/
+
+ENTRYPOINT [ "starknet-lb" ]
