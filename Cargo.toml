@@ -1,7 +1,16 @@
 [package]
 name = "starknet-lb"
+authors = ["Jonathan LEI <me@xjonathan.dev>"]
+license = "MIT OR Apache-2.0"
 version = "0.1.0"
 edition = "2021"
+readme = "README.md"
+documentation = "https://docs.rs/starknet-lb"
+repository = "https://github.com/xJonathanLEI/starknet-lb"
+homepage = "https://github.com/xJonathanLEI/starknet-lb"
+description = "Pending block-aware Starknet-native RPC load balancer"
+keywords = ["starknet", "rpc", "load-balancer"]
+exclude = [".github/**"]
 
 [dependencies]
 anyhow = { version = "1.0.94", default-features = false }

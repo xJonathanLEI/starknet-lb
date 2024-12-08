@@ -106,6 +106,6 @@ jobs:
         run: |
           cargo login ${{ secrets.CRATES_IO_API_TOKEN }}
 
-      - name: "Public crate"
+      - name: "Publish crate"
         run: |
           cargo publish
