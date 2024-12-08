@@ -39,6 +39,8 @@ async fn main() -> Result<()> {
 
     let axum_app = Router::new()
         .route("/", post(proxy))
+        // TOOD: implement actual multi-version support
+        .route("/rpc/v0_7", post(proxy))
         .with_state(Arc::new(load_balancer));
     let axum_listener = tokio::net::TcpListener::bind(("0.0.0.0", cli.port)).await?;
 
