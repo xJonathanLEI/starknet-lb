@@ -8,6 +8,8 @@
 
 Running multiple Starknet full nodes but having trouble making sure requests don't hit staled instances? `starknet-lb` is here to rescue! Built from scratch for Starknet, `starknet-lb` is aware of Starknet's `PENDING` block to make the most informed decision on traffic distribution.
 
+Not only is `starknet-lb` aware of the existence of the `PENDING` block, it also knows that `PENDING` blocks of the same height can still be different, where ones with more transactions are considered to be more up-to-date.
+
 > [!NOTE]
 >
 > `starknet-lb` is in early development. Currently, it only sends traffic to instances with the most up-to-date pending block, ensuring access to the latest network state at the cost of resource under-utilization. This should be improved in the future with configurable, context-based stalenss policy that's able to utilize staled instances to serve historical data (e.g. an instance that's 10 blocks behind chain head should have no problem serving a `starknet_call` request on a block from 5 days ago).
