@@ -15,6 +15,8 @@ use load_balancer::LoadBalancer;
 mod upstream_store;
 use upstream_store::UpstreamStoreManager;
 
+mod upstream_tracker;
+
 mod shutdown;
 
 /// 10 seconds.
