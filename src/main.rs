@@ -13,7 +13,7 @@ mod load_balancer;
 use load_balancer::LoadBalancer;
 
 mod upstream_store;
-use upstream_store::UpstreamStore;
+use upstream_store::UpstreamStoreManager;
 
 mod shutdown;
 
@@ -34,8 +34,10 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let store = UpstreamStore::new(cli.upstreams);
-    let (load_balancer, store_shutdown) = store.start().await?;
+    let store_manager = UpstreamStoreManager::new(cli.upstreams);
+    let (store, store_shutdown) = store_manager.start().await?;
+
+    let load_balancer = LoadBalancer::new(store);
 
     let axum_app = Router::new()
         .route("/", post(proxy))
@@ -70,12 +72,7 @@ async fn main() -> Result<()> {
 async fn proxy(State(lb): State<Arc<LoadBalancer>>, raw_body: String) -> impl IntoResponse {
     // TODO: make proxy semantic-aware instead of blindly sending raw text
     // TODO: proper error handling
-    match lb
-        .get_client()
-        .expect("no available upstream")
-        .send(raw_body)
-        .await
-    {
+    match lb.route(raw_body).await {
         Ok(value) => (
             [(axum::http::header::CONTENT_TYPE, "application/json")],
             value,

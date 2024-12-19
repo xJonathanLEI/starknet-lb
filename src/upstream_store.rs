@@ -2,6 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
+use rand::{thread_rng, Rng};
 use starknet::{
     core::types::{BlockId, BlockTag, MaybePendingBlockWithTxHashes},
     providers::{jsonrpc::HttpTransport, JsonRpcClient, Provider},
@@ -16,53 +17,58 @@ use url::Url;
 use crate::{
     cli::UpstreamSpec,
     head::{ChainHead, ConfirmedHead, PendingHead},
-    load_balancer::LoadBalancer,
     shutdown::{FinishSignal, ShutdownHandle},
 };
 
-pub struct UpstreamStore {
+pub struct UpstreamStoreManager {
     upstreams: Vec<UpstreamSpec>,
+}
+
+pub struct UpstreamStore {
+    upstreams: Vec<Upstream>,
+}
+
+struct Upstream {
+    endpoint: Url,
+    head: Arc<ArcSwap<Option<ChainHead>>>,
 }
 
 // TODO: support block stream subscription via WebSocket instead of polling
 struct UpstreamTracker {
-    index: usize,
+    head: Arc<ArcSwap<Option<ChainHead>>>,
     client: JsonRpcClient<HttpTransport>,
     channel: UnboundedSender<NewHeadMessage>,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct NewHeadMessage {
-    index: usize,
-    head: ChainHead,
-}
+struct NewHeadMessage;
 
 // TODO: make this configurable for each upstream group.
 const TRACKER_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const TRACKER_POLL_TIMEOUT: Duration = Duration::from_secs(2);
 
-impl UpstreamStore {
+impl UpstreamStoreManager {
     pub fn new(upstream_specs: Vec<UpstreamSpec>) -> Self {
         Self {
             upstreams: upstream_specs,
         }
     }
 
-    pub async fn start(self) -> Result<(LoadBalancer, ShutdownHandle)> {
+    pub async fn start(self) -> Result<(UpstreamStore, ShutdownHandle)> {
         let (shutdown_handle, finish_sender) = ShutdownHandle::new();
         let cancellation_token = shutdown_handle.cancellation_token();
 
         let (head_sender, head_receiver) = tokio::sync::mpsc::unbounded_channel();
 
         // TODO: dynamically monitor DNS resolution instead of only checking at startup
-        let mut resolved_upstreams = vec![];
+        let mut resolved_upstreams: Vec<Upstream> = vec![];
         for spec in self.upstreams {
             match spec {
-                UpstreamSpec::Raw(url) => resolved_upstreams.push(url),
+                UpstreamSpec::Raw(url) => resolved_upstreams.push(url.into()),
                 UpstreamSpec::Dns(dns_spec) => {
                     for name in lookup_host(dns_spec.host_port).await? {
                         resolved_upstreams
-                            .push(Url::parse(&format!("http://{}{}", name, dns_spec.path))?)
+                            .push(Url::parse(&format!("http://{}{}", name, dns_spec.path))?.into())
                     }
                 }
             }
@@ -70,17 +76,20 @@ impl UpstreamStore {
 
         println!("{} upstreams resolved:", resolved_upstreams.len());
         for upstream in resolved_upstreams.iter() {
-            println!("- {}", upstream);
+            println!("- {}", upstream.endpoint);
         }
 
         let task_handles = resolved_upstreams
             .iter()
-            .enumerate()
-            .map(|(ind, upstream)| {
+            .map(|upstream| {
                 let (task_shutdown_handle, task_finish_handle) = ShutdownHandle::new();
                 let task_cancellation_token = task_shutdown_handle.cancellation_token();
 
-                let tracker = UpstreamTracker::new(ind, upstream.clone(), head_sender.clone());
+                let tracker = UpstreamTracker::new(
+                    upstream.head.clone(),
+                    upstream.endpoint.clone(),
+                    head_sender.clone(),
+                );
 
                 tokio::spawn(async move {
                     tracker.run_once().await;
@@ -101,68 +110,37 @@ impl UpstreamStore {
             })
             .collect::<Vec<_>>();
 
-        let available_upstreams = Arc::new(ArcSwap::from_pointee(Vec::<usize>::new()));
-
         // TODO: implement a way to detect readiness, as currently the app starts up with no
         //       available upstreams and will fail first few requests.
         tokio::spawn(Self::run(
-            resolved_upstreams.len(),
             head_receiver,
-            available_upstreams.clone(),
             task_handles,
             finish_sender,
             cancellation_token,
         ));
 
         Ok((
-            LoadBalancer::new(resolved_upstreams, available_upstreams),
+            UpstreamStore {
+                upstreams: resolved_upstreams,
+            },
             shutdown_handle,
         ))
     }
 
     async fn run(
-        upstream_count: usize,
         mut head_receiver: UnboundedReceiver<NewHeadMessage>,
-        available_upstreams: Arc<ArcSwap<Vec<usize>>>,
         task_handles: Vec<ShutdownHandle>,
         finish_sender: FinishSignal,
         cancellation_token: CancellationToken,
     ) {
-        let mut heads: Vec<Option<ChainHead>> = Vec::with_capacity(upstream_count);
-        heads.resize(upstream_count, None);
-
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     Self::shutdown(task_handles, finish_sender).await;
                     break;
                 }
-                Some(new_head) = head_receiver.recv() => {
-                    heads[new_head.index] = Some(new_head.head);
-
-                    // Only allow the absolute most up-to-date upstream
-                    // TODO: implement policy for staleness tolerance (maybe even method-based)
-                    let available = if let Some(max_head) = heads.iter().flatten().max() {
-                        heads
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(ind, head)| match head {
-                                Some(head) => {
-                                    if head == max_head {
-                                        Some(ind)
-                                    } else {
-                                        None
-                                    }
-                                }
-                                None => None,
-                            })
-                            .collect::<Vec<_>>()
-                    } else {
-                        vec![]
-                    };
-
-                    available_upstreams.store(Arc::new(available));
-                },
+                // TODO: use this as a tick to build cache.
+                Some(_) = head_receiver.recv() => {},
             }
         }
     }
@@ -175,10 +153,50 @@ impl UpstreamStore {
     }
 }
 
+impl UpstreamStore {
+    pub fn get_upstream(&self) -> Option<Url> {
+        // TODO: make request context available to be able to route non-real-time-sensitive requests
+        //       to lagging upstreams.
+        // TODO: use the manager event loop (currently useless) to build cache for common request
+        //       targets to avoid having to loop through all upstreams on every single request.
+
+        let available = if let Some(max_head) = self
+            .upstreams
+            .iter()
+            .filter_map(|upstream| *upstream.head.load_full())
+            .max()
+        {
+            self.upstreams
+                .iter()
+                .filter(|upstream| {
+                    upstream
+                        .head
+                        .load_full()
+                        .is_some_and(|head| head >= max_head)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+
+        if available.is_empty() {
+            None
+        } else {
+            let mut rng = thread_rng();
+            let chosen = &available[rng.gen_range(0..available.len())];
+            Some(chosen.endpoint.clone())
+        }
+    }
+}
+
 impl UpstreamTracker {
-    fn new(index: usize, rpc_url: Url, channel: UnboundedSender<NewHeadMessage>) -> Self {
+    fn new(
+        head: Arc<ArcSwap<Option<ChainHead>>>,
+        rpc_url: Url,
+        channel: UnboundedSender<NewHeadMessage>,
+    ) -> Self {
         Self {
-            index,
+            head,
             client: JsonRpcClient::new(HttpTransport::new_with_client(
                 rpc_url,
                 reqwest::ClientBuilder::new()
@@ -198,7 +216,7 @@ impl UpstreamTracker {
     }
 
     async fn run_inner(&self) -> Result<()> {
-        let head = match self
+        let new_head = match self
             .client
             .get_block_with_tx_hashes(BlockId::Tag(BlockTag::Pending))
             .await?
@@ -233,11 +251,18 @@ impl UpstreamTracker {
             }
         };
 
-        let _ = self.channel.send(NewHeadMessage {
-            index: self.index,
-            head,
-        });
+        self.head.store(Arc::new(Some(new_head)));
+        let _ = self.channel.send(NewHeadMessage);
 
         Ok(())
+    }
+}
+
+impl From<Url> for Upstream {
+    fn from(value: Url) -> Self {
+        Self {
+            endpoint: value,
+            head: Arc::new(ArcSwap::from_pointee(None)),
+        }
     }
 }
