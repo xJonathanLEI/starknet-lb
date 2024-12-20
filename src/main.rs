@@ -36,8 +36,7 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let store_manager = UpstreamStoreManager::new(cli.upstreams);
-    let (store, store_shutdown) = store_manager.start().await?;
+    let (store, store_shutdown) = UpstreamStoreManager::new().start(cli.upstreams).await?;
 
     let load_balancer = LoadBalancer::new(store);
 
