@@ -32,7 +32,7 @@ Two types of upstreams are supported:
 
 1. Raw URL: Simply supply the full URL of the upstream endpoint as the value. For example: `--upstream https://starknet-mainnet.public.blastapi.io/rpc/v0_7`.
 
-2. DNS: Use the `dns:` prefix to set a DNS name that will be resolved into actual hosts. This can be very useful in environments involving auto-scaling (e.g. Kubernetes), where the list of upstream hosts is not static.
+2. DNS: Use the `dns:` prefix to set a DNS name that will be resolved into actual hosts. This can be very useful in environments involving auto-scaling (e.g. Kubernetes), where the list of upstream hosts is not static. The DNS name is monitored to automatically add or remove upstreams.
 
    An simple example of setting a DNS upstream is `--upstream dns:pathfinder.default.svc.cluster.local`.
 
@@ -41,10 +41,6 @@ Two types of upstreams are supported:
    It's also possible to specify a URL path to apply to all the resolved hosts. To use a path of `/rpc/v0_7`: `--upstream dns:pathfinder.default.svc.cluster.local/rpc/v0_7`.
 
    The two optional components can also be combined. Here's an example of using both in the same specification: `--upstream dns:pathfinder.default.svc.cluster.local:8080/rpc/v0_7`.
-
-> [!NOTE]
->
-> The load balancer is a work in progress. Specifically, DNS hostnames are only resolved at startup and are not continuously monitored. This should be implemented in the future.
 
 ## License
 

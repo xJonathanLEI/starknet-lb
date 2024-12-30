@@ -12,6 +12,8 @@ mod head;
 mod load_balancer;
 use load_balancer::LoadBalancer;
 
+mod upstream_resolver;
+
 mod upstream_store;
 use upstream_store::UpstreamStoreManager;
 
@@ -36,7 +38,7 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let (store, store_shutdown) = UpstreamStoreManager::new().start(cli.upstreams).await?;
+    let (store, store_shutdown) = UpstreamStoreManager::new().start(cli.upstreams)?;
 
     let load_balancer = LoadBalancer::new(store);
 
