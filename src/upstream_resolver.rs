@@ -64,12 +64,22 @@ impl UpstreamResolver {
         for spec in self.upstream_specs.iter() {
             match spec {
                 UpstreamSpec::Raw(url) => latest_upstreams.push(url.to_owned().into()),
-                UpstreamSpec::Dns(dns_spec) => {
-                    for name in lookup_host(&dns_spec.host_port).await? {
-                        latest_upstreams
-                            .push(Url::parse(&format!("http://{}{}", name, dns_spec.path))?.into())
+                UpstreamSpec::Dns(dns_spec) => match lookup_host(&dns_spec.host_port).await {
+                    Ok(resolution) => {
+                        for name in resolution {
+                            latest_upstreams.push(
+                                Url::parse(&format!("http://{}{}", name, dns_spec.path))?.into(),
+                            )
+                        }
                     }
-                }
+                    Err(_) => {
+                        // This can happen in Kubernetes when the upstream headless service is still
+                        // being deployed. It should be safe to ignore during deployment.
+                        //
+                        // Nevertheless, a warning is still printed for visibility.
+                        eprintln!("Warning: cannot resolve DNS name: {}", dns_spec.host_port);
+                    }
+                },
             }
         }
 
