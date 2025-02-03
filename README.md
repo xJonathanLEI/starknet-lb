@@ -42,6 +42,20 @@ Two types of upstreams are supported:
 
    The two optional components can also be combined. Here's an example of using both in the same specification: `--upstream dns:pathfinder.default.svc.cluster.local:8080/rpc/v0_7`.
 
+## Multi-spec-version support
+
+Currently, `starknet-lb` serves on these paths:
+
+- `/`
+- `/rpc/v0_7`
+- `/rpc/v0_8`
+
+Yet, `starknet-lb` does _not_ actually ship with multi-version support. All these paths are handled exactly the same way by utilizing the whole upstream pool.
+
+Therefore, for now, it's important to configure `starknet-lb` with upstream URLs that are versioned (e.g. use `/rpc/v0_7` instead of `/`), and **do not mix** different versions for the same `starknet-lb` instance.
+
+In the future, `starknet-lb` shall be made aware of what spec versions each upstream offers to be able to support multi-version for real.
+
 ## License
 
 Licensed under either of
